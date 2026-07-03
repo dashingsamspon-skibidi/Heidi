@@ -67,7 +67,7 @@ if not best_entries:
 # Tìm bài mới
 new_posts = []
 for entry in best_entries:
-    if entry.id == last_id:
+    if entry.id == last_id.txt:
         break
     new_posts.append(entry)
 
