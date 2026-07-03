@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone, timedelta
 
 DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
-USERNAME = "Trickcal_Re"
+USERNAME = "trickcal_re"
 VN_TZ = timezone(timedelta(hours=7))
 
 RSS_SOURCES = [
