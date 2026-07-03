@@ -2,11 +2,6 @@ import feedparser
 import requests
 import os
 import socket
-socket.setdefaulttimeout(10)  # chặn mỗi lần fetch RSS/Discord treo quá 10s
-r = requests.post(DISCORD_WEBHOOK, json={
-    "content": link,
-    "username": "Heidi",
-}, timeout=10)
 from datetime import datetime, timezone, timedelta
 
 DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
@@ -83,7 +78,7 @@ print(f"Bài mới: {len(new_posts)}")
 if new_posts:
     for post in reversed(new_posts):
         link = post.link
-for d in ["nitter.net", "nitter.poast.org", "nitter.rawbit.ninja", "nitter.privacydev.net"]:
+        for d in ["nitter.net", "nitter.poast.org", "nitter.rawbit.ninja", "nitter.privacydev.net"]:
             link = link.replace(d, "x.com")
         r = requests.post(DISCORD_WEBHOOK, json={
             "content": link,
@@ -91,7 +86,7 @@ for d in ["nitter.net", "nitter.poast.org", "nitter.rawbit.ninja", "nitter.priva
         })
         print(f"Discord: {r.status_code} → {link}")
 
-    with open("last_id.", "w") as f:
+    with open("last_id.txt", "w") as f:
         f.write(best_entries[0].id)
     print("✅ Đã lưu last_id")
 else:
