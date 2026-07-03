@@ -1,6 +1,12 @@
 import feedparser
 import requests
 import os
+import socket
+socket.setdefaulttimeout(10)  # chặn mỗi lần fetch RSS/Discord treo quá 10s
+r = requests.post(DISCORD_WEBHOOK, json={
+    "content": link,
+    "username": "Heidi",
+}, timeout=10)
 from datetime import datetime, timezone, timedelta
 
 DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
@@ -89,4 +95,3 @@ if new_posts:
     print("✅ Đã lưu last_id")
 else:
     print("Không có bài mới")
-bot (2).py
