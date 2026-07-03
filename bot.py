@@ -83,7 +83,7 @@ print(f"Bài mới: {len(new_posts)}")
 if new_posts:
     for post in reversed(new_posts):
         link = post.link
-        for d in ["nitter.net", "nitter.poast.org", "nitter.rawbit.ninja", "nitter.privacydev.net"]:
+    for d in ["nitter.net", "nitter.poast.org", "nitter.rawbit.ninja", "nitter.privacydev.net"]:
             link = link.replace(d, "x.com")
         r = requests.post(DISCORD_WEBHOOK, json={
             "content": link,
