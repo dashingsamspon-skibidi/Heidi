@@ -60,8 +60,6 @@ for url in RSS_SOURCES:
             best_entries = feed.entries
     except Exception as e:
         print(f"❌ {e}")
-        for d in ["nitter.net", "nitter.poast.org", "nitter.rawbit.ninja", "nitter.privacydev.net", "rsshub.app", "twitt.re"]:
-    link = link.replace(d, "x.com")
 if not best_entries:
     print("Tất cả nguồn thất bại")
     exit()
