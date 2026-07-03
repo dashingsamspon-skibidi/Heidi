@@ -73,7 +73,7 @@ if not best_entries:
 # Tìm bài mới
 new_posts = []
 for entry in best_entries:
-    if entry.id == last_id.txt:
+    if entry.id == last_id:
         break
     new_posts.append(entry)
 
@@ -90,7 +90,7 @@ if new_posts:
         })
         print(f"Discord: {r.status_code} → {link}")
 
-    with open("last_id.txt", "w") as f:
+    with open("last_id.", "w") as f:
         f.write(best_entries[0].id)
     print("✅ Đã lưu last_id")
 else:
