@@ -18,7 +18,7 @@ RSS_SOURCES = [
 ]
 
 # Khung giờ an toàn (phút VN) — khớp lịch cron-job.org thực tế (tight+sparse: 9:00–19:40)
-WINDOW = (8*60+55, 21*60+35)  # 8:55 - 21:35, mở rộng phủ khung tối mới
+WINDOW = (6*60+55, 18*60+50)  # 6:55 - 18:50 VN, đệm 5p mỗi đầu, khớp Job A/B mới
 
 now_vn = datetime.now(VN_TZ)
 total_min = now_vn.hour * 60 + now_vn.minute
