@@ -9,7 +9,7 @@ USERNAME = "trickcal_re"
 VN_TZ = timezone(timedelta(hours=7))
 
 RSS_SOURCES = [
-    f"https://fxtwitter.com/{USERNAME}/rss",
+    f"https://fxtwitter.com/{USERNAME}/feed.xml",
 ]
 
 # Khung giờ an toàn (phút VN) — khớp lịch cron-job.org thực tế (tight+sparse: 9:00–19:40)
