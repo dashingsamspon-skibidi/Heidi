@@ -71,8 +71,9 @@ print(f"Bài mới: {len(new_posts)}")
 if new_posts:
     for post in reversed(new_posts):
         link = post.link
-        for d in ["fxtwitter.com"]:
-    link = link.replace(d, "fxtwitter.com")   # trước đây là "x.com"
+        if "fxtwitter.com" not in link:
+    for d in ["twitter.com", "x.com"]:
+        link = link.replace(f"://{d}", "://fxtwitter.com")
         r = requests.post(DISCORD_WEBHOOK, json={
             "content": link,
             "username": "Heidi",
