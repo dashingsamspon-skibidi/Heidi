@@ -9,12 +9,7 @@ USERNAME = "trickcal_re"
 VN_TZ = timezone(timedelta(hours=7))
 
 RSS_SOURCES = [
-    f"https://nitter.net/{USERNAME}/rss",
-    f"https://rsshub.app/twitter/user/{USERNAME}",
-    f"https://nitter.poast.org/{USERNAME}/rss",
-    f"https://nitter.rawbit.ninja/{USERNAME}/rss",
-    f"https://nitter.privacydev.net/{USERNAME}/rss",
-    f"https://twitt.re/{USERNAME}/rss",
+    f"https://fxtwitter.com/{USERNAME}/rss",
 ]
 
 # Khung giờ an toàn (phút VN) — khớp lịch cron-job.org thực tế (tight+sparse: 9:00–19:40)
