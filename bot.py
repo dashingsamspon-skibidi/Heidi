@@ -4,6 +4,7 @@ import os
 import socket
 from datetime import datetime, timezone, timedelta
 
+socket.setdefaulttimeout(10)  # chặn mỗi lần fetch RSS/Discord treo quá 10s — khôi phục lại, bản trước bị rớt mất
 DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
 USERNAME = "trickcal_re"
 VN_TZ = timezone(timedelta(hours=7))
@@ -40,7 +41,6 @@ def entry_time(entry):
 
 best_entries = []
 best_time = datetime.min.replace(tzinfo=timezone.utc)
-
 for url in RSS_SOURCES:
     print(f"Thử: {url}")
     try:
@@ -55,9 +55,12 @@ for url in RSS_SOURCES:
             best_entries = feed.entries
     except Exception as e:
         print(f"❌ {e}")
+
 if not best_entries:
     print("Tất cả nguồn thất bại")
     exit()
+
+print(f"DEBUG raw link: {best_entries[0].link} | raw id: {best_entries[0].id}")  # xem log để xác nhận domain thật, xóa dòng này sau khi đã chắc chắn
 
 # Tìm bài mới
 new_posts = []
@@ -65,21 +68,19 @@ for entry in best_entries:
     if entry.id == last_id:
         break
     new_posts.append(entry)
-
 print(f"Bài mới: {len(new_posts)}")
 
 if new_posts:
     for post in reversed(new_posts):
         link = post.link
         if "fxtwitter.com" not in link:
-    for d in ["twitter.com", "x.com"]:
-        link = link.replace(f"://{d}", "://fxtwitter.com")
+            for d in ["twitter.com", "x.com"]:
+                link = link.replace(f"://{d}", "://fxtwitter.com")
         r = requests.post(DISCORD_WEBHOOK, json={
             "content": link,
             "username": "Heidi",
-        })
+        }, timeout=10)
         print(f"Discord: {r.status_code} → {link}")
-
     with open("last_id.txt", "w") as f:
         f.write(best_entries[0].id)
     print("✅ Đã lưu last_id")
