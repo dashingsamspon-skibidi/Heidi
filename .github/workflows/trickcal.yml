@@ -1,4 +1,4 @@
-name: Heidi
+name: Heid
 on:
   workflow_dispatch:
 
