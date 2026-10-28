@@ -1,6 +1,19 @@
 name: Heidi
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Naver: chỉ in ra, không gửi Discord, không ghi state"
+        type: boolean
+        default: false
+      force_feed_id:
+        description: "Naver: ép xử lý bài này (vd 8373557) để test giao diện"
+        required: false
+        default: ""
+
+concurrency:
+  group: heidi-post
+  cancel-in-progress: false
 
 jobs:
   post:
@@ -18,10 +31,22 @@ jobs:
       - run: python bot.py
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Naver lounge
+        if: ${{ !cancelled() }}
+        run: python naver.py
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          NAVER_DISCORD_WEBHOOK: ${{ secrets.NAVER_DISCORD_WEBHOOK }}
+          NAVER_DRY_RUN: ${{ inputs.dry_run }}
+          NAVER_FORCE_FEED_ID: ${{ inputs.force_feed_id }}
+
       - name: Save last_id
+        if: ${{ !cancelled() }}
         run: |
           git config user.email "bot@bot.com"
           git config user.name "Bot"
           git add last_id.txt
+          [ -f naver_state.json ] && git add naver_state.json || true
           git diff --staged --quiet || git commit -m "update last_id"
           git push
