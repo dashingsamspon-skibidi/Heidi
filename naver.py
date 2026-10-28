@@ -40,6 +40,12 @@ LOUNGE_TITLE = "트릭컬 리바이브"      # dòng tiêu đề lớn ở đầ
 BUTTON_LABEL = "네이버 라운지"        # chữ trên nút link
 ACCENT_COLOR = 0x7B68EE               # màu vạch bên trái
 
+# Khối link cuối bài (공식 홈페이지 - [바로 가기] ... + ảnh icon loại bài) lặp ở mọi bài → tự bỏ.
+STRIP_FOOTER = True       # False = giữ nguyên, không cắt gì
+DROP_THANKS_LINE = True   # bỏ luôn dòng "감사합니다." ngay trước khối link đó
+# Dòng có dạng "<nhãn> - [link]" với nhãn nằm trong danh sách này mới bị coi là footer (thêm nhãn mới ở đây).
+FOOTER_LABELS = ["공식 홈페이지", "아이시움 라운지", "트릭컬 노트", "Google Play", "App Store"]
+
 MAX_POSTS_PER_RUN = 5     # chặn flood: 1 lần chạy tối đa đăng ngần này bài (lấy bài mới nhất)
 KEEP_SEEN = 60            # nhớ tối đa ngần này id/bảng
 MAX_MESSAGES_PER_POST = 4 # bài quá dài thì cắt, kèm ghi chú "xem đầy đủ trên Naver"
@@ -189,6 +195,14 @@ def esc(s):
     return "".join(out)
 
 
+LABEL_MAP = str.maketrans({"[": "［", "]": "］", "*": "＊", "_": "＿", "`": "｀", "~": "～", "|": "｜", "\\": "＼"})
+
+
+def esc_label(s):
+    """Nhãn của link [nhãn](url): Discord KHÔNG xử lý backslash ở đây (hiện nguyên \\[ \\]) → đổi sang ký tự full-width."""
+    return s.translate(LABEL_MAP)
+
+
 def norm_url(u):
     u = (u or "").strip()
     if not u or u.startswith(("data:", "javascript:", "#", "blob:")):
@@ -244,7 +258,7 @@ class Html2Blocks(HTMLParser):
             if href and core == href:
                 piece = core
             else:
-                piece = esc(core)
+                piece = esc_label(core) if href else esc(core)
                 if b:
                     piece = f"**{piece}**"
                 if i:
@@ -254,8 +268,7 @@ class Html2Blocks(HTMLParser):
                 if s:
                     piece = f"~~{piece}~~"
                 if href:
-                    inner = piece.replace("[", "\\[").replace("]", "\\]")
-                    piece = f"[{inner}]({href.replace(')', '%29')})"
+                    piece = f"[{piece}]({href.replace(')', '%29')})"
             out.append(lead + piece + trail)
         return re.sub(r" {2,}", " ", "".join(out)).strip()
 
@@ -438,6 +451,55 @@ class Html2Blocks(HTMLParser):
             self.chunks.append((data, self.state()))
 
 
+def _label_re(label):
+    return r"\s*".join(re.escape(w) for w in label.split())
+
+
+FOOTER_LINE_RE = re.compile(
+    r"^(?:" + "|".join(_label_re(l) for l in FOOTER_LABELS) + r")[^\-–—:：]{0,24}[-–—:：]", re.I)
+THANKS_RE = re.compile(r"^[\s*_~]*감사합니다[.!~\s]*[*_~\s]*$")
+
+
+def plain_md(line):
+    s = re.sub(r"\[([^\]]*)\]\([^)\s]*\)", r"\1", line)      # [nhãn](url) → nhãn
+    s = re.sub(r"[*_~`\\]", "", s)                               # bỏ ký hiệu markdown
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def is_footer_line(line):
+    return "](" in line and bool(FOOTER_LINE_RE.match(plain_md(line)))
+
+
+def strip_footer(blocks):
+    """Cắt khối link cuối bài: các dòng '<nhãn> - [link]' (>= 2 dòng) + dòng '감사합니다.' kèm theo + ảnh/đường kẻ đuôi."""
+    ti = max((i for i, b in enumerate(blocks) if b[0] == "text"), default=None)
+    if ti is None:
+        return blocks
+    lines = blocks[ti][1].split("\n")
+    foot = [i for i, l in enumerate(lines) if is_footer_line(l)]
+    if len(foot) < 2:
+        return blocks
+    start = foot[0]
+    footer_is_tail = all(is_footer_line(l) or not l.strip() for l in lines[start:])
+    kept = lines[:start] if footer_is_tail else [l for i, l in enumerate(lines) if i not in set(foot)]
+    while kept and not kept[-1].strip():
+        kept.pop()
+    if footer_is_tail and DROP_THANKS_LINE and kept and THANKS_RE.match(kept[-1]):
+        kept.pop()
+        while kept and not kept[-1].strip():
+            kept.pop()
+    out = blocks[:ti]
+    if kept:
+        out.append(("text", "\n".join(kept)))
+    rest = blocks[ti + 1:]
+    if footer_is_tail:
+        rest = [b for b in rest if b[0] not in ("img", "hr")]   # icon loại bài / đường kẻ nằm sau link
+    out += rest
+    while out and out[-1][0] == "hr":
+        out.pop()
+    return out
+
+
 def contents_to_blocks(contents):
     """contents của bài (HTML; hoặc JSON SmartEditor nếu API trả kiểu đó) → danh sách khối."""
     raw = contents or ""
@@ -450,6 +512,8 @@ def contents_to_blocks(contents):
         p.close()
         p.close_text()
         blocks = p.blocks
+    if STRIP_FOOTER:
+        blocks = strip_footer(blocks)
     # link video (YouTube) có thể nằm trong thuộc tính/script nên parser bỏ sót → nhặt thêm cho đủ
     seen_text = "\n".join(b[1] for b in blocks if b[0] == "text")
     extra, ids = [], set()
