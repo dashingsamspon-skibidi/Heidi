@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 
@@ -46,8 +47,13 @@ DROP_THANKS_LINE = True   # bỏ luôn dòng "감사합니다." ngay trước kh
 # Dòng có dạng "<nhãn> - [link]" với nhãn nằm trong danh sách này mới bị coi là footer (thêm nhãn mới ở đây).
 FOOTER_LABELS = ["공식 홈페이지", "아이시움 라운지", "트릭컬 노트", "Google Play", "App Store"]
 
+# Bài có TIÊU ĐỀ khớp 1 trong các mẫu regex này sẽ bị bỏ qua (X đã đăng rồi), không phân biệt hoa/thường.
+# Hiện bỏ các bài webtoon của BOGO. Muốn bỏ thêm: thêm mẫu, vd r"^\s*[\[［]\s*판토\s*[\]］]" (Panto).
+SKIP_TITLE_PATTERNS = [r"^\s*[\[［]\s*BOGO\s*[\]］]"]
+
 MAX_POSTS_PER_RUN = 5     # chặn flood: 1 lần chạy tối đa đăng ngần này bài (lấy bài mới nhất)
-KEEP_SEEN = 60            # nhớ tối đa ngần này id/bảng
+KEEP_SEEN = 100           # nhớ tối đa ngần này id/bảng
+MAX_POST_AGE_HOURS = float(os.environ.get("NAVER_MAX_AGE_HOURS", "72"))  # bài 'mới' nhưng cũ hơn mức này → chỉ ghi nhớ, không đăng
 MAX_MESSAGES_PER_POST = 4 # bài quá dài thì cắt, kèm ghi chú "xem đầy đủ trên Naver"
 TEXT_BUDGET = 3700        # Discord cho 4000 ký tự chữ/tin — chừa dư để an toàn
 COMP_BUDGET = 30          # Discord cho 40 component/tin — chừa dư để an toàn
@@ -119,17 +125,69 @@ def fetch_boards():
     return out
 
 
+def find_feed_lists(node, skip=()):
+    """Tìm trong JSON mọi danh sách bài (phần tử có 'feedId', hoặc phần tử['feed'] có 'feedId').
+    Trả {đường_dẫn: [dict bài]} — không phụ thuộc tên key nên chịu được việc Naver đổi cấu trúc nhẹ."""
+    found = {}
+
+    def walk(n, path, depth):
+        if depth > 5:
+            return
+        if isinstance(n, dict):
+            for k, v in n.items():
+                if any(sk in str(k).lower() for sk in skip):
+                    continue
+                walk(v, path + [str(k)], depth + 1)
+        elif isinstance(n, list):
+            items = []
+            for el in n:
+                f = el.get("feed") if isinstance(el, dict) and isinstance(el.get("feed"), dict) else el
+                if isinstance(f, dict) and f.get("feedId") is not None:
+                    items.append(f)
+            if items:
+                found[".".join(path) or "(gốc)"] = items
+
+    walk(node, [], 0)
+    return found
+
+
 def fetch_board_feeds(board_id):
-    c = api_get(f"/lounge/{LOUNGE}/new/popularFeeds/board", {"boardId": board_id, "limit": 20}) or {}
-    feeds = c.get("recentFeeds")
-    if feeds is None:
-        raise ApiError(f"bảng {board_id}: thiếu 'recentFeeds' (các key nhận được: {sorted(c.keys())})")
-    out = []
-    for f in feeds:
-        if isinstance(f, dict) and f.get("feedId") is not None:
-            out.append({"id": str(f["feedId"]), "title": (f.get("title") or "").strip(),
-                        "created": f.get("createdDate")})
-    return out
+    """Gộp danh sách bài của 1 bảng từ 2 endpoint (bài nào có ở 1 trong 2 đều tính), mới nhất trước.
+    1) /community/lounge/{slug}/feed — chính endpoint trang board/{id}?order=new dùng (có cả bài ghim/công khai)
+    2) /lounge/{slug}/new/popularFeeds/board — widget 'bài mới' (dự phòng; có bảng trả về rỗng với bài ghim)"""
+    merged, notes, answered = {}, [], False
+
+    def take(groups, label, keep=None):
+        total = 0
+        for path, items in groups.items():
+            if keep and not keep(path):
+                continue
+            for f in items:
+                total += 1
+                fid = str(f["feedId"])
+                if fid not in merged:
+                    merged[fid] = {"id": fid, "title": (f.get("title") or "").strip(),
+                                   "created": f.get("createdDate")}
+        notes.append(f"{label}: {total} bài")
+
+    try:
+        c = api_get(f"/community/lounge/{LOUNGE}/feed",
+                    {"boardId": board_id, "order": "NEW", "limit": 20, "offset": 0, "buffFilteringYN": "N"})
+        take(find_feed_lists(c, skip=("popular",)), "feed")
+        answered = True
+    except ApiError as e:
+        notes.append(f"feed: LỖI ({e})")
+    try:
+        c = api_get(f"/lounge/{LOUNGE}/new/popularFeeds/board", {"boardId": board_id, "limit": 20})
+        take(find_feed_lists(c), "popularFeeds/board",
+             keep=lambda p: p.split(".")[-1].lower().startswith("recent") or "notice" in p.lower())
+        answered = True
+    except ApiError as e:
+        notes.append(f"popularFeeds/board: LỖI ({e})")
+    print("   endpoint → " + " · ".join(notes))
+    if not answered:
+        raise ApiError(f"bảng {board_id}: cả 2 endpoint danh sách đều lỗi")
+    return sorted(merged.values(), key=lambda f: fid_key(f["id"]), reverse=True)
 
 
 def fetch_detail(feed_id):
@@ -803,13 +861,17 @@ def send(webhook, payload):
 
 # ─────────────────────────── TRẠNG THÁI ───────────────────────────
 def load_state():
+    if not os.path.exists(STATE_FILE):
+        print(f"ℹ️ chưa có {STATE_FILE} (lần đầu — hoặc file không được commit lại sau lần chạy trước)")
+        return {"boards": {}}
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
             s = json.load(f)
         if isinstance(s, dict) and isinstance(s.get("boards"), dict):
             return s
-    except (FileNotFoundError, ValueError):
+    except ValueError:
         pass
+    print(f"⚠️ {STATE_FILE} hỏng/sai định dạng → coi như chưa có")
     return {"boards": {}}
 
 
@@ -818,10 +880,24 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=1, sort_keys=True)
 
 
+def is_skipped_title(title):
+    return any(re.search(p, title or "", re.I) for p in SKIP_TITLE_PATTERNS)
+
+
+def fmt_created(v):
+    ep = parse_created(v)
+    return datetime.fromtimestamp(ep, KST).strftime("%Y-%m-%d %H:%M KST") if ep else "?"
+
+
 # ─────────────────────────── LUỒNG CHÍNH ───────────────────────────
 def prepare_post(feed_id):
     d = fetch_detail(feed_id)
-    blocks = contents_to_blocks(d["contents"])
+    try:
+        blocks = contents_to_blocks(d["contents"])
+    except Exception:
+        traceback.print_exc()
+        print(f"   ⚠️ đọc nội dung bài {feed_id} lỗi → chỉ gửi tiêu đề + nút link")
+        blocks = []
     return {
         "id": str(feed_id), "title": d["title"], "epoch": parse_created(d["created"]),
         "url": f"{SITE}/lounge/{LOUNGE}/board/detail/{feed_id}", "blocks": blocks,
@@ -830,13 +906,32 @@ def prepare_post(feed_id):
     }
 
 
-def deliver(post, webhooks, dry):
-    """Dựng + gửi 1 bài. Trả về 'done' (coi như đã xử lý xong) hoặc 'retry' (để lần sau thử lại)."""
-    payloads = build_messages(post)
+def build_for(meta, feed_id):
+    """Lấy + dựng 1 bài. Lỗi API → ApiError (để lần sau thử lại). Lỗi dựng nội dung → bản rút gọn (tiêu đề + nút)."""
+    post = prepare_post(feed_id)
+    if not post["title"]:
+        post["title"] = meta.get("title", "")
+    if not post["epoch"]:
+        post["epoch"] = parse_created(meta.get("created"))
+    try:
+        payloads = build_messages(post)
+        bad = [pr for p in payloads for pr in check_limits(p)[0]]
+        if bad:
+            raise ValueError(f"payload vi phạm giới hạn Discord: {bad}")
+        return post, payloads
+    except Exception:
+        traceback.print_exc()
+        print(f"   ⚠️ dựng nội dung bài {feed_id} lỗi → gửi bản rút gọn (tiêu đề + nút link)")
+        post = dict(post, blocks=[])
+        return post, build_messages(post)
+
+
+def deliver(post, payloads, webhooks, dry):
+    """Gửi 1 bài. Trả về 'done' | 'done_with_errors' (đã xử lý xong) hoặc 'retry' (để lần sau thử lại)."""
     print(f"📰 [{post['id']}] {post['title']}")
     print(f"   tác giả={post['author']} · khối={len(post['blocks'])} · {len(payloads)} tin nhắn")
     if not post["blocks"]:
-        print(f"   ⚠️ không trích được nội dung. Đầu contents: {post['raw_head']!r}")
+        print(f"   ⚠️ không có nội dung trích được. Đầu contents: {post['raw_head']!r}")
     for i, p in enumerate(payloads, 1):
         problems, st = check_limits(p)
         texts = []
@@ -859,8 +954,14 @@ def deliver(post, webhooks, dry):
     results = []
     for wi, wh in enumerate(webhooks, 1):
         res = "ok"
-        for p in payloads:
+        for pi, p in enumerate(payloads):
             res = send(wh, p)
+            if res == "permanent" and pi == 0:
+                # Discord từ chối bản đầy đủ (vd link ảnh hỏng) → thử bản rút gọn để người đọc vẫn nhận được thông báo
+                print("   ↪ bản đầy đủ bị từ chối → thử bản rút gọn (tiêu đề + nút link)")
+                res = send(wh, build_messages(dict(post, blocks=[]))[0])
+                if res == "ok":
+                    break
             if res != "ok":
                 break
             time.sleep(0.8)
@@ -875,7 +976,8 @@ def main():
     dry = env_flag("NAVER_DRY_RUN")
     raw_wh = os.environ.get("NAVER_DISCORD_WEBHOOK") or os.environ.get("DISCORD_WEBHOOK") or ""
     webhooks = [w.strip() for w in raw_wh.split(",") if w.strip()]
-    print(f"Naver lounge '{LOUNGE}' · bảng {BOARD_IDS} · webhook: {len(webhooks)}"
+    which = "NAVER_DISCORD_WEBHOOK" if os.environ.get("NAVER_DISCORD_WEBHOOK") else "DISCORD_WEBHOOK"
+    print(f"Naver lounge '{LOUNGE}' · bảng {BOARD_IDS} · {len(webhooks)} webhook (lấy từ {which})"
           + (" · DRY-RUN (không gửi, không ghi state)" if dry else ""))
     if not webhooks and not dry:
         print("❌ Thiếu DISCORD_WEBHOOK / NAVER_DISCORD_WEBHOOK")
@@ -886,9 +988,11 @@ def main():
             print(f"  {bid:>6} | {name} | nhóm: {group}")
         return 0
 
-    state, changed, errors = load_state(), False, 0
+    state = load_state()
+    changed, errors, posted, seeded = False, 0, 0, 0
 
     for bid in BOARD_IDS:
+        print(f"── bảng {bid}")
         try:
             feeds = fetch_board_feeds(bid)
         except ApiError as e:
@@ -896,39 +1000,58 @@ def main():
             errors += 1
             continue
         if not feeds:
-            print(f"⚠️ bảng {bid}: danh sách trống — bỏ qua (không seed để tránh flood lần sau)")
+            print(f"❌ bảng {bid}: không thấy bài nào ở cả 2 endpoint → sai id bảng, hoặc Naver đổi API "
+                  "(chạy với NAVER_LIST_BOARDS=1 để xem id các bảng)")
+            errors += 1
             continue
-        ids_new_first = [f["id"] for f in sorted(feeds, key=lambda f: fid_key(f["id"]), reverse=True)]
+        newest = feeds[0]
+        print(f"   mới nhất trong danh sách: {newest['id']} · {fmt_created(newest['created'])} · {short(newest['title'], 40)!r}"
+              f" (tổng {len(feeds)} bài)")
         bs = state["boards"].get(bid)
         if bs is None:
-            print(f"🌱 bảng {bid}: lần đầu → ghi nhớ {len(ids_new_first)} bài hiện có, KHÔNG đăng")
-            state["boards"][bid] = {"seen": ids_new_first[:KEEP_SEEN]}
+            print(f"🌱 bảng {bid}: lần đầu → ghi nhớ {len(feeds)} bài hiện có, KHÔNG đăng. "
+                  "(Nếu dòng này lặp lại ở MỌI lần chạy theo lịch = naver_state.json không được commit lại → xem bước Save last_id)")
+            state["boards"][bid] = {"seen": [f["id"] for f in feeds][:KEEP_SEEN]}
             changed = True
+            seeded += 1
             continue
         seen = set(bs.get("seen", []))
+        print(f"   state: {len(seen)} id đã thấy, lớn nhất {max(seen, key=fid_key) if seen else '—'}")
         unseen = sorted((f for f in feeds if f["id"] not in seen), key=lambda f: fid_key(f["id"]))
-        print(f"bảng {bid}: {len(feeds)} bài trong danh sách, {len(unseen)} bài mới")
-        if len(unseen) > MAX_POSTS_PER_RUN:
-            print(f"⚠️ {len(unseen)} bài mới > {MAX_POSTS_PER_RUN} — chỉ đăng {MAX_POSTS_PER_RUN} bài mới nhất")
-        handled = []
-        for f in unseen[-MAX_POSTS_PER_RUN:]:
+        now = time.time()
+        stale = [f for f in unseen if (parse_created(f["created"]) or now) < now - MAX_POST_AGE_HOURS * 3600]
+        fresh = [f for f in unseen if f not in stale]
+        print(f"   {len(unseen)} bài chưa thấy → {len(fresh)} mới, {len(stale)} quá cũ (>{MAX_POST_AGE_HOURS:g}h)")
+        if stale:
+            print(f"   ⏭️ chỉ ghi nhớ, không đăng: {[f['id'] for f in stale][:10]}")
+        filtered = [f for f in fresh if is_skipped_title(f["title"])]
+        fresh = [f for f in fresh if f not in filtered]
+        if filtered:
+            print(f"   ⏭️ bỏ qua theo bộ lọc tiêu đề: {[(f['id'], short(f['title'], 30)) for f in filtered]}")
+        if len(fresh) > MAX_POSTS_PER_RUN:
+            print(f"⚠️ {len(fresh)} bài mới > {MAX_POSTS_PER_RUN} — chỉ đăng {MAX_POSTS_PER_RUN} bài mới nhất")
+        handled = [f["id"] for f in stale] + [f["id"] for f in filtered]
+        skipped = [f["id"] for f in fresh[:-MAX_POSTS_PER_RUN]] if len(fresh) > MAX_POSTS_PER_RUN else []
+        for f in fresh[-MAX_POSTS_PER_RUN:]:
             try:
-                post = prepare_post(f["id"])
+                post, payloads = build_for(f, f["id"])
             except ApiError as e:
                 print(f"❌ bài {f['id']}: {e} → để lần sau thử lại")
                 errors += 1
                 continue
-            if not post["title"]:
-                post["title"] = f["title"]
-            outcome = deliver(post, webhooks, dry)
+            if is_skipped_title(post["title"]):
+                print(f"   ⏭️ bài {f['id']} khớp bộ lọc tiêu đề ({short(post['title'], 30)!r}) → bỏ qua")
+                handled.append(f["id"])
+                continue
+            outcome = deliver(post, payloads, webhooks, dry)
             if outcome == "retry":
                 errors += 1
                 print(f"   ↻ bài {f['id']} chưa gửi được ở webhook nào → lần sau thử lại")
             else:
                 handled.append(f["id"])
+                posted += 1
                 if outcome == "done_with_errors":
                     errors += 1
-        skipped = [f["id"] for f in unseen[:-MAX_POSTS_PER_RUN]] if len(unseen) > MAX_POSTS_PER_RUN else []
         newly_seen = handled + skipped
         if newly_seen and not dry:
             merged = sorted(set(bs.get("seen", [])) | set(newly_seen), key=fid_key, reverse=True)
@@ -938,16 +1061,17 @@ def main():
     for fid in [x.strip() for x in os.environ.get("NAVER_FORCE_FEED_ID", "").split(",") if x.strip()]:
         print(f"🔧 ép xử lý bài {fid}")
         try:
-            post = prepare_post(fid)
+            post, payloads = build_for({}, fid)
         except ApiError as e:
             print(f"❌ bài {fid}: {e}")
             errors += 1
             continue
-        deliver(post, webhooks, dry)
+        deliver(post, payloads, webhooks, dry)
 
     if changed and not dry:
         save_state(state)
         print("💾 đã lưu naver_state.json")
+    print(f"Tổng kết Naver: {'sẽ đăng' if dry else 'đã đăng'} {posted} bài · ghi nhớ lần đầu {seeded} bảng · lỗi {errors}")
     return 1 if errors else 0
 
 
