@@ -172,7 +172,10 @@ def resolve_board_ids():
         bad = any(re.search(p, name, re.I) for p in AUTO_BOARD_EXCLUDE)
         (chosen if hit and not bad else rest).append((bid, name, group))
     print("Bảng theo dõi (tự chọn theo tên): " + (", ".join(f"{b}·{n}" for b, n, _ in chosen) or "—"))
-    print("Bảng bỏ qua: " + (", ".join(f"{b}·{n}" for b, n, _ in rest) or "—"))
+    if env_flag("NAVER_DRY_RUN"):
+        print("Bảng bỏ qua: " + (", ".join(f"{b}·{n}" for b, n, _ in rest) or "—"))
+    else:
+        print(f"Bảng bỏ qua: {len(rest)} bảng (chạy dry_run để xem tên từng bảng)")
     if not chosen:
         print(f"⚠️ không bảng nào khớp AUTO_BOARD_INCLUDE → tạm dùng bảng {FALLBACK_BOARD_IDS}")
         return list(FALLBACK_BOARD_IDS)
@@ -341,6 +344,7 @@ class Html2Blocks(HTMLParser):
         self.fmt = {"b": 0, "i": 0, "u": 0, "s": 0}
         self.hrefs, self.stack, self.lists = [], [], []
         self.p_marks = []
+        self.in_cell = 0
         self.quote = 0
         self.heading = 0
         self.prefix_next = None
@@ -459,6 +463,16 @@ class Html2Blocks(HTMLParser):
             self.fmt[fmt] += 1
         self.stack.append((tag, fmt, href_pushed))
 
+        if tag in ("td", "th"):
+            if self.cell_idx > 0:
+                self.chunks.append((" | ", (False, False, False, False, None)))
+            self.cell_idx += 1
+            self.in_cell += 1
+            return
+        if self.in_cell and tag in BLOCK_TAGS:
+            # trong ô bảng: mọi đoạn/danh sách/dòng của ô được gộp thành 1 dòng (không tách thành các dòng lẻ "|")
+            self.chunks.append((" · " if tag == "li" else " ", (False, False, False, False, None)))
+            return
         if tag in ("ul", "ol"):
             self.flush_line()
             self.lists.append([tag, 0])
@@ -477,10 +491,6 @@ class Html2Blocks(HTMLParser):
         elif tag == "tr":
             self.flush_line()
             self.cell_idx = 0
-        elif tag in ("td", "th"):
-            if self.cell_idx > 0:
-                self.chunks.append((" | ", (False, False, False, False, None)))
-            self.cell_idx += 1
         elif tag == "p":
             self.flush_line()
             self.p_marks.append(len(self.lines))
@@ -494,7 +504,9 @@ class Html2Blocks(HTMLParser):
 
     def handle_void(self, tag, a):
         if tag == "br":
-            if not self.flush_line():
+            if self.in_cell:
+                self.chunks.append((" ", (False, False, False, False, None)))
+            elif not self.flush_line():
                 self.lines.append("")
         elif tag == "hr":
             self.close_text()
@@ -528,12 +540,20 @@ class Html2Blocks(HTMLParser):
             return
         popped = self.stack[idx:]
         del self.stack[idx:]
-        for _, fmt, href_pushed in popped:
+        for ptag, fmt, href_pushed in popped:
             if fmt:
                 self.fmt[fmt] = max(0, self.fmt[fmt] - 1)
             if href_pushed and self.hrefs:
                 self.hrefs.pop()
+            if ptag in ("td", "th") and ptag != tag:    # ô bảng không đóng tường minh (HTML lỗi) → tự đóng
+                self.in_cell = max(0, self.in_cell - 1)
 
+        if tag in ("td", "th"):
+            self.in_cell = max(0, self.in_cell - 1)
+            return
+        if self.in_cell and tag in BLOCK_TAGS:
+            self.chunks.append((" ", (False, False, False, False, None)))
+            return
         if tag in ("ul", "ol"):
             self.flush_line()
             if self.lists:
