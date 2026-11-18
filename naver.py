@@ -49,11 +49,11 @@ ACCENT_COLOR = 0x7B68EE               # màu vạch bên trái
 STRIP_FOOTER = True       # False = giữ nguyên, không cắt gì
 DROP_THANKS_LINE = True   # bỏ luôn dòng "감사합니다." ngay trước khối link đó
 # Dòng có dạng "<nhãn> - [link]" với nhãn nằm trong danh sách này mới bị coi là footer (thêm nhãn mới ở đây).
-FOOTER_LABELS = ["공식 홈페이지", "아이시움 라운지", "트릭컬 노트", "Google Play", "App Store"]
+FOOTER_LABELS = ["공식 홈페이지", "아이시움 라운지", "트릭컬 노트", "Google Play", "App Store","감사합니다.","트릭컬 노트 BETA"]
 
 # Bài có TIÊU ĐỀ khớp 1 trong các mẫu regex này sẽ bị bỏ qua (X đã đăng rồi), không phân biệt hoa/thường.
 # Hiện bỏ các bài webtoon của BOGO. Muốn bỏ thêm: thêm mẫu, vd r"^\s*[\[［]\s*판토\s*[\]］]" (Panto).
-SKIP_TITLE_PATTERNS = [r"^\s*[\[［]\s*BOGO\s*[\]］]", r"^\s*[\[［]\s*판토\s*[\]］]", r"^\s*[\[［]\s*BGM\s*[\]］]"]
+SKIP_TITLE_PATTERNS = [r"^\s*[\[［]\s*BOGO\s*[\]］]", r"^\s*[\[［]\s*판토\s*[\]］]", r"^\s*[\[［]\s*BGM\s*[\]］],r"^\s*[\[［]\s*만기\s*[\]］]"]
 
 # Chế độ NAVER_BOARD_IDS=auto: theo dõi mọi bảng có TÊN khớp INCLUDE và không khớp EXCLUDE (regex, không phân biệt hoa/thường).
 # Bài mới của Naver nằm rải ở nhiều bảng (공지사항, 테마극장 PV, 진행 이벤트, 공식 웹툰…), không chỉ bảng 11. Log mỗi lần chạy
