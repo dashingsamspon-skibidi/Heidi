@@ -1,5 +1,7 @@
 import feedparser
 import requests
+import re
+import html
 import os
 import socket
 from datetime import datetime, timezone, timedelta
@@ -8,6 +10,32 @@ socket.setdefaulttimeout(10)  # chặn mỗi lần fetch RSS/Discord treo quá 1
 DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
 USERNAME = "trickcal_re"
 VN_TZ = timezone(timedelta(hours=7))
+
+# ── Bỏ qua bài có từ khóa (KHÔNG gửi lên Discord, nhưng vẫn ghi nhớ là đã xử lý) ──
+SKIP_WORDS = ["[안내]"
+    # "BOGO",             # bài có chữ này (không phân biệt hoa/thường) sẽ bị bỏ qua
+    # "re:\\bart\\b",     # tiền tố "re:" = regex (không phân biệt hoa/thường)
+]
+
+
+def entry_text(entry):
+    """Gom chữ của 1 bài trong feed (tiêu đề + nội dung), bỏ thẻ HTML — để thẻ <a href=...> không khớp nhầm vào URL."""
+    parts = [getattr(entry, "title", ""), getattr(entry, "summary", ""), getattr(entry, "description", "")]
+    for c in getattr(entry, "content", None) or []:
+        parts.append(c.get("value", "") if isinstance(c, dict) else str(c))
+    text = re.sub(r"<[^>]+>", " ", " ".join(p for p in parts if p))
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
+
+def skip_reason(entry):
+    text = entry_text(entry)
+    for w in SKIP_WORDS:
+        if w.startswith("re:"):
+            if re.search(w[3:], text, re.I):
+                return w
+        elif w.casefold() in text.casefold():
+            return w
+    return None
 
 RSS_SOURCES = [
     f"https://fxtwitter.com/{USERNAME}/feed.xml",
