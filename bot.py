@@ -1,14 +1,16 @@
 import feedparser
 import requests
+import random
+import time
+import os
 import re
 import html
-import os
 import socket
 from datetime import datetime, timezone, timedelta
 
-socket.setdefaulttimeout(10)  # chặn mỗi lần fetch RSS/Discord treo quá 10s — khôi phục lại, bản trước bị rớt mất
-DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
-USERNAME = "trickcal_re"
+socket.setdefaulttimeout(10)  # chặn treo khi fetch RSS/Discord quá 10s
+DISCORD_WEBHOOKS = [w.strip() for w in os.environ["DISCORD_WEBHOOK"].split(",") if w.strip()]
+USERNAME = "trickcal_en"
 VN_TZ = timezone(timedelta(hours=7))
 
 # ── Bỏ qua bài có từ khóa (KHÔNG gửi lên Discord, nhưng vẫn ghi nhớ là đã xử lý) ──
@@ -38,11 +40,13 @@ def skip_reason(entry):
     return None
 
 RSS_SOURCES = [
-    f"https://fxtwitter.com/{USERNAME}/feed.xml",
+    f"https://fixupx.com/{USERNAME}/feed.xml",
 ]
 
+KEEP_LAST_N = 3  # trickcal_en thỉnh thoảng xoá/sửa 1 tweet trước khi đăng bài mới -> giữ dư vài id làm mốc dự phòng
+
 # Khung giờ an toàn (phút VN) — khớp lịch cron-job.org thực tế (tight+sparse: 9:00–19:40)
-WINDOW = (6*60+55, 18*60+50)  # 6:55 - 18:50 VN, đệm 5p mỗi đầu, khớp Job A/B mới
+WINDOW = (8*60+55, 19*60+45)  # 8:55 - 19:45, có đệm 2 đầu — không đổi, không liên quan tới việc đổi RSS source
 
 now_vn = datetime.now(VN_TZ)
 total_min = now_vn.hour * 60 + now_vn.minute
@@ -54,12 +58,17 @@ if not in_window:
 
 print(f"Scan lúc {now_vn.strftime('%H:%M')} VN")
 
-# Đọc last_id
+# Jitter — chỉ chờ SAU KHI đã xác nhận trong khung giờ, tránh gọi API đồng loạt đúng giây 0
+jitter = random.uniform(5, 20)
+print(f"Chờ {jitter:.1f}s trước khi fetch")
+time.sleep(jitter)
+
+# Đọc các id gần nhất — vẫn 1 file last_id.txt như cũ, chỉ khác là có thể có tới KEEP_LAST_N dòng thay vì 1
 try:
     with open("last_id.txt") as f:
-        last_id = f.read().strip()
-except:
-    last_id = ""
+        last_ids = [line.strip() for line in f if line.strip()]
+except FileNotFoundError:
+    last_ids = []
 
 # Lấy RSS — chọn nguồn tươi nhất
 def entry_time(entry):
@@ -88,29 +97,45 @@ if not best_entries:
     print("Tất cả nguồn thất bại")
     exit()
 
-print(f"DEBUG raw link: {best_entries[0].link} | raw id: {best_entries[0].id}")  # xem log để xác nhận domain thật, xóa dòng này sau khi đã chắc chắn
+lag = (datetime.now(timezone.utc) - best_time).total_seconds()
+print(f"DEBUG: bài mới nhất cũ hơn hiện tại {lag:.0f} giây")  # theo dõi vài lần để xem cache CDN có làm stale không — như đã bàn ở tin trước
 
-# Tìm bài mới
+print(f"DEBUG raw link: {best_entries[0].link} | raw id: {best_entries[0].id}")  # xoá sau khi đã xác nhận format ổn định
+
+# Tìm bài mới: dừng khi gặp BẤT KỲ id nào trong các id gần nhất đã lưu (không chỉ đúng 1 id cuối như trước)
 new_posts = []
 for entry in best_entries:
-    if entry.id == last_id:
+    if entry.id in last_ids:
         break
     new_posts.append(entry)
+else:
+    # for...else: chỉ chạy khi vòng lặp đi hết feed mà KHÔNG break, tức không khớp id nào cả
+    if last_ids:
+        print(f"⚠️ Không khớp id nào trong {len(last_ids)} id đã lưu — coi toàn bộ feed là bài mới")
 print(f"Bài mới: {len(new_posts)}")
 
 if new_posts:
     for post in reversed(new_posts):
+        reason = skip_reason(post)
+        if reason:
+            print(f"⏭️ Bỏ qua (khớp {reason!r}): {post.link}")
+            continue
+        if SKIP_WORDS:
+            print(f"   (chữ dùng để lọc: {entry_text(post)[:80]!r})")
         link = post.link
-        if "fxtwitter.com" not in link:
+        if "vxtwitter.com" not in link:
             for d in ["twitter.com", "x.com"]:
-                link = link.replace(f"://{d}", "://fxtwitter.com")
-        r = requests.post(DISCORD_WEBHOOK, json={
-            "content": link,
-            "username": "Heidi",
-        }, timeout=10)
-        print(f"Discord: {r.status_code} → {link}")
+                link = link.replace(f"://{d}", "://vxtwitter.com")
+        for i, webhook in enumerate(DISCORD_WEBHOOKS, 1):
+            r = requests.post(webhook, json={
+                "content": link,
+                "username": "Heidi",
+            }, timeout=10)
+            print(f"Discord #{i}: {r.status_code} → {link}")
+
+    updated_ids = ([e.id for e in new_posts] + last_ids)[:KEEP_LAST_N]
     with open("last_id.txt", "w") as f:
-        f.write(best_entries[0].id)
-    print("✅ Đã lưu last_id")
+        f.write("\n".join(updated_ids))
+    print(f"✅ Đã lưu {len(updated_ids)} id gần nhất")
 else:
     print("Không có bài mới")
