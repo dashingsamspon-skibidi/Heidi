@@ -49,7 +49,7 @@ ACCENT_COLOR = 0x7B68EE               # màu vạch bên trái
 STRIP_FOOTER = True       # False = giữ nguyên, không cắt gì
 DROP_THANKS_LINE = True   # bỏ luôn dòng "감사합니다." ngay trước khối link đó
 # Dòng có dạng "<nhãn> - [link]" với nhãn nằm trong danh sách này mới bị coi là footer (thêm nhãn mới ở đây).
-FOOTER_LABELS = ["공식 홈페이지", "아이시움 라운지", "트릭컬 노트", "Google Play", "App Store","감사합니다.","트릭컬 노트 BETA"]
+FOOTER_LABELS = ["공식 홈페이지", "아이시움 라운지", "트릭컬 노트", "Google Play", "App Store"]
 
 # Bài có TIÊU ĐỀ khớp 1 trong các mẫu regex này sẽ bị bỏ qua (X đã đăng rồi), không phân biệt hoa/thường.
 # Hiện bỏ các bài webtoon của BOGO. Muốn bỏ thêm: thêm mẫu, vd r"^\s*[\[［]\s*판토\s*[\]］]" (Panto).
@@ -332,11 +332,31 @@ def norm_url(u):
         u = "https:" + u
     elif u.startswith("/"):
         u = SITE + u
+    elif re.match(r"(www\.)?[a-z0-9-]+\.(com|net|org|me|kr|co\.kr|io|gg|tv|jp|app)(/|\?|$)", u, re.I):
+        u = "https://" + u      # Naver đôi khi lưu link không kèm https:// (vd naver.me/abc)
     if not u.lower().startswith(("http://", "https://")):
         return None
     if re.match(r"http://[^/]*(naver\.com|pstatic\.net)", u, re.I):
         u = "https://" + u[len("http://"):]
     return u.replace(" ", "%20") if len(u) <= 2000 else None
+
+
+def a_href(a):
+    """URL của thẻ <a>: href trước, rồi các thuộc tính phụ mà trình soạn thảo Naver có thể dùng."""
+    for k in ("href", "data-href", "data-url", "data-link"):
+        h = norm_url(a.get(k))
+        if h:
+            return h
+    try:
+        d = json.loads(a.get("data-linkdata") or "{}")
+        if isinstance(d, dict):
+            for k in ("link", "url", "href"):
+                h = norm_url(d.get(k))
+                if h:
+                    return h
+    except ValueError:
+        pass
+    return None
 
 
 class Html2Blocks(HTMLParser):
@@ -460,7 +480,7 @@ class Html2Blocks(HTMLParser):
             fmt = "b"
         href_pushed = False
         if tag == "a":
-            h = norm_url(a.get("href"))
+            h = a_href(a)
             if h:
                 self.hrefs.append(h)
                 href_pushed = True
@@ -593,8 +613,10 @@ def _label_re(label):
     return r"\s*".join(re.escape(w) for w in label.split())
 
 
+_DASH = r"\-\u2010-\u2015\u2212\uFF0D\uFE63ㅡ:："      # - ‐ ‑ ‒ – — ― − － ﹣ ㅡ : ：
 FOOTER_LINE_RE = re.compile(
-    r"^(?:" + "|".join(_label_re(l) for l in FOOTER_LABELS) + r")[^\-–—:：]{0,24}[-–—:：]", re.I)
+    r"^(?:" + "|".join(_label_re(l) for l in FOOTER_LABELS) + r")[^" + _DASH + r"]{0,24}[" + _DASH + r"]", re.I)
+GO_RE = re.compile(r"바로\s*가기|링크|이동|link|click|here", re.I)    # chữ 'bấm vào đây' sau dấu gạch
 THANKS_RE = re.compile(r"^[\s*_~]*감사합니다[.!~\s]*[*_~\s]*$")
 
 
@@ -605,7 +627,11 @@ def plain_md(line):
 
 
 def is_footer_line(line):
-    return "](" in line and bool(FOOTER_LINE_RE.match(plain_md(line)))
+    """Dòng '<nhãn> - [바로가기]'. Có link thật HOẶC phần sau dấu gạch là chữ 'bấm vào' (Naver có khi mất href của link)
+    — nên 'Google Play: 1.0.5' (ghi phiên bản) không bị coi là footer."""
+    p = plain_md(line)
+    m = FOOTER_LINE_RE.match(p)
+    return bool(m) and ("](" in line or bool(GO_RE.search(p[m.end():])))
 
 
 def strip_footer(blocks):
@@ -616,6 +642,9 @@ def strip_footer(blocks):
     lines = blocks[ti][1].split("\n")
     foot = [i for i, l in enumerate(lines) if is_footer_line(l)]
     if len(foot) < 2:
+        near = [l for l in lines if re.search(r"바로\s*가기", l)]
+        if near:
+            print(f"   ℹ️ footer: chỉ nhận ra {len(foot)} dòng (cần >= 2). Các dòng có '바로가기': {near[:6]!r}")
         return blocks
     start = foot[0]
     footer_is_tail = all(is_footer_line(l) or not l.strip() for l in lines[start:])
