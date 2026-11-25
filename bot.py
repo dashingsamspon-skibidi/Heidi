@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 socket.setdefaulttimeout(10)  # chặn treo khi fetch RSS/Discord quá 10s
 DISCORD_WEBHOOKS = [w.strip() for w in os.environ["DISCORD_WEBHOOK"].split(",") if w.strip()]
-USERNAME = "trickcal_en"
+USERNAME = "trickcal_re"
 VN_TZ = timezone(timedelta(hours=7))
 
 # ── Bỏ qua bài có từ khóa (KHÔNG gửi lên Discord, nhưng vẫn ghi nhớ là đã xử lý) ──
