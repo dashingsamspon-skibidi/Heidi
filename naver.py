@@ -57,8 +57,9 @@ SKIP_TITLE_PATTERNS = [
     r"^\s*[\[［]\s*BOGO\s*[\]］]",
     r"^\s*[\[［]\s*판토\s*[\]］]",
     r"^\s*[\[［]\s*BGM\s*[\]］]",
-    r"^\s*[\[［]\s*만기\s*[\]］]"
-    r"^\s*[\[［]\s*업데이트PV\s*[\]］]"
+    r"^\s*[\[［]\s*만기\s*[\]］]",
+    r"^\s*[\[［]\s*업데이트PV\s*[\]］]",
+    r"^\s*[\[［]\s*주말특집\s*[\]］]"
 ]
 
 # Chế độ NAVER_BOARD_IDS=auto: theo dõi mọi bảng có TÊN khớp INCLUDE và không khớp EXCLUDE (regex, không phân biệt hoa/thường).
